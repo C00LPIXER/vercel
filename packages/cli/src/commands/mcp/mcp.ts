@@ -1,6 +1,6 @@
 import output from '../../output-manager';
 import type Client from '../../util/client';
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import { getLinkedProject } from '../../util/projects/link';
 
 const MCP_ENDPOINT = 'https://mcp.vercel.com';
@@ -14,19 +14,23 @@ function getAvailableClients(): string[] {
   ];
 }
 
-function safeExecSync(
+function safeSpawnSync(
   command: string,
-  options: any = {}
-): string | { error: string; stderr: string } {
-  try {
-    return execSync(command, {
-      stdio: 'pipe',
-      encoding: 'utf8',
-      ...options,
-    });
-  } catch (error: any) {
-    return { error: error.message, stderr: error.stderr?.toString() || '' };
+  args: string[],
+  options: object = {}
+): { stdout: string; stderr: string } | { error: string; stderr: string } {
+  const result = spawnSync(command, args, {
+    stdio: 'pipe',
+    encoding: 'utf8',
+    ...options,
+  });
+  if (result.error || result.status !== 0) {
+    return {
+      error: result.error?.message ?? `Process exited with code ${result.status}`,
+      stderr: result.stderr?.toString() || '',
+    };
   }
+  return { stdout: result.stdout?.toString() || '', stderr: result.stderr?.toString() || '' };
 }
 
 async function getProjectSpecificUrl(
@@ -107,11 +111,16 @@ export default async function mcp(client: Client) {
         ? `vercel-${(await getProjectSpecificUrl(client))?.projectName}`
         : 'vercel';
 
-      const result = safeExecSync(
-        `claude mcp add --transport http ${mcpName} ${mcpUrl}`
-      );
+      const result = safeSpawnSync('claude', [
+        'mcp',
+        'add',
+        '--transport',
+        'http',
+        mcpName,
+        mcpUrl ?? MCP_ENDPOINT,
+      ]);
 
-      if (typeof result === 'object' && 'error' in result) {
+      if ('error' in result) {
         if (result.stderr?.includes('already exists')) {
           summary.push('✅ Claude Code: Vercel MCP already configured');
           output.print('ℹ️  Vercel MCP is already configured in Claude Code\n');
@@ -158,15 +167,14 @@ export default async function mcp(client: Client) {
       output.print('─'.repeat(50) + '\n');
     } else if (clientName === 'Cursor') {
       // Check if Cursor is installed
-      const cursorCheck = safeExecSync(
+      const cursorCheck =
         process.platform === 'darwin'
-          ? 'ls /Applications/Cursor.app'
+          ? safeSpawnSync('ls', ['/Applications/Cursor.app'])
           : process.platform === 'win32'
-            ? 'where cursor'
-            : 'which cursor'
-      );
+            ? safeSpawnSync('where', ['cursor'])
+            : safeSpawnSync('which', ['cursor']);
 
-      if (typeof cursorCheck === 'object' && 'error' in cursorCheck) {
+      if ('error' in cursorCheck) {
         output.print('⚠️ Cursor not detected. Please install Cursor first.\n');
         output.print('   Download from: https://cursor.sh\n');
         output.print('\n');
@@ -243,18 +251,17 @@ export default async function mcp(client: Client) {
       const oneClickUrl = `cursor://anysphere.cursor-deeplink/mcp/install?name=${serverName}&config=${encodedConfig}`;
 
       // Try to open the one-click installer
-      try {
-        if (process.platform === 'darwin') {
-          execSync(`open '${oneClickUrl}'`);
-        } else if (process.platform === 'win32') {
-          execSync(`start ${oneClickUrl}`);
-        } else {
-          execSync(`xdg-open '${oneClickUrl}'`);
-        }
+      const openResult =
+        process.platform === 'darwin'
+          ? safeSpawnSync('open', [oneClickUrl])
+          : process.platform === 'win32'
+            ? safeSpawnSync('cmd.exe', ['/c', 'start', '', oneClickUrl])
+            : safeSpawnSync('xdg-open', [oneClickUrl]);
 
+      if (!('error' in openResult)) {
         summary.push('✅ Cursor: One-click installer opened');
         output.print('ℹ️  Follow the prompts in Cursor to complete setup\n');
-      } catch (error) {
+      } else {
         summary.push('⚠️ Cursor: Deep link may not have worked');
         output.print('⚠️ Could not open Cursor automatically\n');
         output.print('💡 Manual setup:\n');
@@ -272,11 +279,12 @@ export default async function mcp(client: Client) {
       }
     } else if (clientName === 'VS Code with Copilot') {
       // Check if GitHub Copilot is installed
-      const copilotCheck = safeExecSync(
-        'code --list-extensions | grep -i copilot'
-      );
+      const copilotListResult = safeSpawnSync('code', ['--list-extensions']);
+      const isCopilotMissing =
+        'error' in copilotListResult ||
+        !copilotListResult.stdout.toLowerCase().includes('copilot');
 
-      if (typeof copilotCheck === 'object' && 'error' in copilotCheck) {
+      if (isCopilotMissing) {
         output.print(
           '⚠️ GitHub Copilot not detected. MCP functionality may be limited.\n'
         );
@@ -356,19 +364,18 @@ export default async function mcp(client: Client) {
       const encodedConfig = encodeURIComponent(JSON.stringify(config));
       const oneClickUrl = `vscode:mcp/install?${encodedConfig}`;
 
-      try {
-        // Try to open the one-click installer
-        if (process.platform === 'darwin') {
-          execSync(`open '${oneClickUrl}'`);
-        } else if (process.platform === 'win32') {
-          execSync(`start ${oneClickUrl}`);
-        } else {
-          execSync(`xdg-open '${oneClickUrl}'`);
-        }
+      // Try to open the one-click installer
+      const vscodeOpenResult =
+        process.platform === 'darwin'
+          ? safeSpawnSync('open', [oneClickUrl])
+          : process.platform === 'win32'
+            ? safeSpawnSync('cmd.exe', ['/c', 'start', '', oneClickUrl])
+            : safeSpawnSync('xdg-open', [oneClickUrl]);
 
+      if (!('error' in vscodeOpenResult)) {
         summary.push('✅ VS Code: One-click installer opened');
         output.print('ℹ️  Follow the prompts in VS Code to complete setup\n');
-      } catch (error) {
+      } else {
         summary.push('❌ VS Code: Failed to open one-click installer');
         output.print('💡 Manual setup instructions:\n');
         output.print('   1. Open VS Code\n');

@@ -90,7 +90,21 @@ async function extractEntry(
 
   if (symlink) {
     const link = await streamToBuffer(readStream);
-    await fs.symlink(link.toString('utf8'), dest);
+    const linkTarget = link.toString('utf8');
+
+    // Validate symlink target to prevent path traversal outside the extraction directory.
+    // Resolve the target relative to the directory containing the symlink.
+    const symlinkDir = path.dirname(dest);
+    const resolvedTarget = path.resolve(symlinkDir, linkTarget);
+    const relativeTarget = path.relative(dir, resolvedTarget);
+
+    if (relativeTarget.startsWith('..')) {
+      throw new Error(
+        `Symlink target "${linkTarget}" in entry "${entry.fileName}" resolves outside of the extraction directory`
+      );
+    }
+
+    await fs.symlink(linkTarget, dest);
   } else {
     await pipe(readStream, fs.createWriteStream(dest, { mode: procMode }));
   }
